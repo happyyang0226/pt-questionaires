@@ -1185,7 +1185,7 @@ function renderNav(){
   h+=`<div class="nav-sep"></div><button class="nav-btn ${state.view==='guide'?'active':''}" data-view="guide"><div><b>🏃 운동 안내문</b><span class="sub">부위별 운동 그림 · 인쇄</span></div></button><button class="nav-btn ${state.view==='algo'?'active':''}" data-view="algo"><div><b>🧭 임상의사결정</b><span class="sub">위험신호 · 분류 · 치료 방향</span></div></button><button class="nav-btn ${state.view==='summary'?'active':''}" data-view="summary"><div><b>결과 요약</b><span class="sub">전체 점수 · 복사</span></div></button><button class="nav-btn ${state.view==='cloud'?'active':''}" data-view="cloud"><div><b>☁️ 저장된 사례</b><span class="sub">로그인 · 저장 · 불러오기</span></div></button><button class="nav-btn" data-print-open="blank"><div><b>🖨 인쇄</b><span class="sub">빈 설문지 · 안내문 · 보고서</span></div></button>`;
   $('#nav').innerHTML=h;
   const act=$('#nav .active');
-  if(act&&window.innerWidth<=860){try{act.scrollIntoView({block:'nearest',inline:'center'});}catch(e){}}
+  if(act&&window.innerWidth<=860){try{let sc=act.parentElement;while(sc&&sc!==document.body&&!(sc.scrollWidth>sc.clientWidth+2))sc=sc.parentElement;if(sc&&sc!==document.body){const ar=act.getBoundingClientRect(),sr=sc.getBoundingClientRect();sc.scrollLeft+=(ar.left+ar.width/2)-(sr.left+sr.width/2);}}catch(e){}}
 }
 function resultHTML(inst){
   const r=inst.score(state.answers[inst.id]);const done=isComplete(inst);
@@ -1238,6 +1238,20 @@ function renderSummary(){
   <div class="note">이 도구는 교육·임상 보조용입니다. 점수 해석은 임상 소견과 함께 판단하십시오. 응답은 이 브라우저에만 임시 저장되며 서버로 전송되지 않습니다.</div>`;
 }
 function render(){renderNav();const inst=INST.find(i=>i.id===state.view);inst?renderInst(inst):state.view==='algo'?renderAlgo():state.view==='guide'?renderGuide():state.view==='cloud'&&window.renderCloud?renderCloud():renderSummary();}
+/* 응답할 때 화면 위치 유지 + 다음 미응답 문항으로 부드럽게 이동 */
+function keepPos(i,q,fn,adv){
+  const id=`it-${i}-${q}`;const e0=document.getElementById(id);const y0=e0?e0.getBoundingClientRect().top:null;
+  fn();
+  const e1=document.getElementById(id);
+  if(e1&&y0!=null){const d=e1.getBoundingClientRect().top-y0;if(Math.abs(d)>1)window.scrollBy(0,d);}
+  if(!adv)return;
+  const inst=INST.find(x=>x.id===i), a=state.answers[i];
+  if(!inst||a[q]===undefined||isComplete(inst))return;
+  const k=inst.items.findIndex(x=>x.id===q);
+  const nx=inst.items.slice(k+1).find(x=>a[x.id]===undefined);
+  const el=nx&&document.getElementById(`it-${i}-${nx.id}`);
+  if(el)setTimeout(()=>el.scrollIntoView({behavior:'smooth',block:'center'}),180);
+}
 function refreshItem(instId,qid){
   const inst=INST.find(i=>i.id===instId);const idx=inst.items.findIndex(i=>i.id===qid);
   const tmp=document.createElement('div');tmp.innerHTML=itemHTML(inst,inst.items[idx],idx,true);
@@ -1265,10 +1279,11 @@ document.addEventListener('click',e=>{
   if(nb){state.view=nb.dataset.view;save();render();window.scrollTo({top:0});return;}
   const op=e.target.closest('.opt');
   if(op){
+    const prevA=state.answers[op.dataset.i]&&state.answers[op.dataset.i][op.dataset.q];
     const {i,q}=op.dataset;const ans=state.answers[i];const inst=INST.find(x=>x.id===i);const wasDone=isComplete(inst);
     const v=op.dataset.v==='na'?'na':+op.dataset.v;
     if(ans[q]===v) delete ans[q]; else ans[q]=v;
-    save();refreshItem(i,q);
+    keepPos(i,q,()=>{save();refreshItem(i,q);},prevA===undefined&&op.dataset.m===undefined);
     if(!wasDone&&isComplete(inst)) setTimeout(()=>showResult(inst),250);
     return;
   }
