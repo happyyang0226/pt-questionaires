@@ -854,6 +854,76 @@ function redStep(extraRed,branchText){
 function algoInputsHTML(){
   return CLIN.map(g=>`<div class="al-in"><h4>${esc(g.t)}</h4>${g.note?`<div class="note" style="margin:0 0 6px">${esc(g.note)}</div>`:''}${g.items.map(([id,l])=>id==='__h'?`<div class="al-sub">${esc(l)}</div>`:`<label class="al-ck ${g.red?'red':''}"><input type="checkbox" data-clin="${id}" ${clinOn(id)?'checked':''}> <span>${esc(l)}</span></label>`).join('')}${g.confirm?`<label class="al-ck ok"><input type="checkbox" data-clin="${g.confirm[0]}" ${clinOn(g.confirm[0])?'checked':''}> <span><b>${esc(g.confirm[1])}</b></span></label>`:''}</div>`).join('');
 }
+/* ============ 검사 소견 + 설문 결과 통합(공통) ============ */
+function instInfo(i){const s=i.score(state.answers[i.id]);const sh=i.short||i.id.toUpperCase();let st=null;try{if(typeof RX!=='undefined'&&RX[i.id]){st=rxData(i).st;}}catch(e){}
+  return {id:i.id,short:sh,text:`${sh} ${s.main}${s.unit?' '+s.unit:''}`,interp:s.interp||'—',lv:s.lv||'none',st};}
+// rows0: [{reg, dx:[[이름,소견수,tone,우선중재]], ids:[설문], qOnly, fOnly, qRefer}]
+function integrate(rows0,opt){
+  opt=opt||{};
+  const SR={h:3,m:2,l:1}, rows=[], refer=[], cobo=[], pt=[], pend=[];
+  let gst=null;
+  rows0.forEach(({reg,dx,ids,qOnly,fOnly,qRefer})=>{
+    dx=dx||[]; const sc=(ids||[]).map(doneInst).filter(Boolean).map(instInfo);
+    if(!dx.length&&!sc.length) return;
+    const stg=sc.filter(x=>x.st).reduce((m,x)=>!m||SR[x.st]>SR[m]?x.st:m,null);
+    if(stg&&(!gst||SR[stg]>SR[gst]))gst=stg;
+    const sev=sc.some(x=>x.lv==='bad'), mod=sc.some(x=>x.lv==='warn'), mild=sc.length&&!sev&&!mod;
+    const strong=dx.some(x=>x[1]>=2);
+    const dxT=dx.map(([nm,n])=>`${nm}${/의심|소견|부족|분류|통증$|감별/.test(nm)?'':' 의심'}(${n>=2?'소견 2개 이상':'소견 1개'})`).join(', ');
+    const scT=sc.map(x=>`${x.text} — ${x.interp}`).join(' / ');
+    let verdict,tone='info',note=[];
+    if(qOnly){
+      if(sev){verdict='설문상 높음 — 전문 평가 필요';tone='warn';note.push(qRefer||'설문 점수가 기준을 넘었습니다. 전문가에게 의뢰하고 물리치료는 병행합니다.');cobo.push(reg+': '+(qRefer?'전문 평가 의뢰':'의뢰'));}
+      else if(mod){verdict='설문상 경계';tone='warn';note.push('2~4주 후 같은 설문으로 다시 선별합니다.');}
+      else {verdict='설문상 정상 범위';note.push('정기 시점에 다시 선별합니다.');}
+    } else if(fOnly||!(ids||[]).length){
+      verdict='검사 소견으로 판정(관련 설문 없음)';note.push('이 영역은 설문이 없어 검사 소견만으로 판정했습니다.');
+    } else if(dx.length&&sc.length){
+      if(mild&&strong){verdict='소견 뚜렷, 기능 영향 경미';note.push('검사 소견은 뚜렷하지만 설문상 장애는 가벼우므로 교육·자가 운동 중심으로 시작합니다.');}
+      else if(mild){verdict='소견·설문 모두 경미';note.push('소견도 설문상 장애도 가볍습니다. 남은 검사로 확인하면서 교육·자가 운동 중심으로 관리합니다.');}
+      else if(sev&&!strong){verdict='장애에 비해 소견 근거 약함';tone='warn';note.push('설문상 장애가 큰 데 비해 검사 소견 근거가 약합니다. 남은 검사를 시행하고, 통증 민감화·심리사회 요인(공포 회피, 우울)도 확인하십시오.');}
+      else {verdict='소견과 설문 일치';note.push('검사 소견과 설문 결과가 같은 방향을 가리킵니다. 아래 치료 방향으로 진행합니다.');}
+    } else if(dx.length){
+      verdict='설문 미시행';tone='warn';note.push(`${ids.map(id=>{const i=INST.find(x=>x.id===id);return i?(i.short||id):id;}).join('·')} 설문을 시행해 기준선 점수를 정하십시오. 치료 강도와 재평가 기준이 설문 점수로 정해집니다.`);
+    } else {
+      if(sev||mod){verdict='설문상 장애 있음 — 검사 소견 없음';tone='warn';note.push(`설문상 ${sc.map(x=>x.interp).join('·')} 수준입니다. 검사 소견을 체크해 원인을 확인하십시오.`);pend.push(reg);}
+      else {verdict='설문상 장애 경미, 검사 소견 없음';note.push('경과 관찰과 자가 관리 교육을 하고, 증상이 바뀌면 다시 평가합니다.');}
+    }
+    const dxTone=dx.some(x=>x[2]==='bad')?'bad':dx.some(x=>x[2]==='warn')?'warn':null;
+    if(dxTone==='bad'){tone='bad';note.unshift('의뢰가 필요한 질환이 의심되므로 설문 결과와 관계없이 의뢰를 먼저 합니다.');}
+    else if(dxTone==='warn'&&tone!=='bad') tone='warn';
+    dx.forEach(([nm,n,tn])=>{const lab=`${reg}: ${nm}`;(tn==='bad'?refer:tn==='warn'?cobo:pt).push(lab);});
+    const act=dx.length?dx[0][3]:null;
+    const inten=stg?`${STAGE[stg][0]} — ${STAGE[stg][1]}`:(sc.length?'':'설문을 시행하면 치료 강도(자극성 단계)가 정해집니다');
+    rows.push({reg,dxT:dxT||(qOnly?'(검사 소견 해당 없음)':'체크한 소견 없음'),scT:scT||((fOnly||!(ids||[]).length)?'(관련 설문 없음)':'설문 미시행'),verdict,tone,note,inten,
+      line:`${reg}: ${dx.length?dx.map(x=>x[0]).join('·'):(qOnly?'설문 선별':'원인 미확인')} + ${sc.length?sc.map(x=>`${x.short} ${x.interp}`).join('·'):'설문 없음'} → ${verdict}${stg?` · 강도: ${STAGE[stg][0]}`:''}${act?` · 우선 중재: ${act}`:''}`});
+  });
+  const parts=[];
+  if(refer.length) parts.push('의뢰 우선: '+refer.join(', '));
+  if(cobo.length) parts.push('의뢰 + 물리치료 병행: '+cobo.join(', '));
+  if(pt.length) parts.push('물리치료: '+pt.join(', ')+(gst?` (${STAGE[gst][0]} 단계)`:''));
+  if(pend.length) parts.push('원인 확인 필요: '+pend.join('·'));
+  const plan=rows.map(r=>r.line);
+  (opt.global||[]).map(doneInst).filter(Boolean).map(instInfo).forEach(g=>plan.unshift(`전체 기능: ${g.text} — ${g.interp}`));
+  const used=Object.keys(opt.mcid||{}).filter(id=>doneInst(id));
+  const reeval=(opt.reeval||'4~6주 후 같은 설문으로 재평가')+(used.length?` — 목표 변화량: ${used.map(id=>opt.mcid[id]).join(', ')} 이상 개선`:'');
+  return {rows,decision:parts.join(' / ')||(rows.length?'뚜렷한 의뢰·치료 대상 없음 — 경과 관찰과 자가 관리':'설문 또는 검사 소견을 입력하십시오'),plan,reeval,gst};
+}
+function integHTML(IG){
+  if(!IG||!IG.rows.length) return '';
+  return `<table class="ig"><thead><tr><th>영역</th><th>검사 소견(의심 질환)</th><th>설문 결과</th><th>통합 판정</th></tr></thead><tbody>${IG.rows.map(r=>`<tr><td><b>${esc(r.reg)}</b></td><td>${esc(r.dxT)}</td><td>${esc(r.scT)}${r.inten?`<div class="ig-s">강도: ${esc(r.inten)}</div>`:''}</td><td><span class="ig-v t-${r.tone}">${esc(r.verdict)}</span><div class="ig-s">${r.note.map(esc).join(' ')}</div></td></tr>`).join('')}</tbody></table>`;
+}
+(function(){const st=document.createElement('style');st.textContent=`
+.ig{width:100%;border-collapse:collapse;margin:6px 0 10px;font-size:13px;background:#fff;border-radius:8px;overflow:hidden}
+.ig th,.ig td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+.ig th{background:#f3f0eb;font-size:12.5px}
+.ig td:first-child,.ig th:first-child{white-space:nowrap;width:1%}
+.ig td:nth-child(2){min-width:150px}
+.ig-s{color:var(--muted);font-size:12px;margin-top:3px}
+.ig-v{display:inline-block;font-weight:700;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent-ink)}
+.ig-v.t-warn{background:var(--warn-soft);color:#7a4c08}.ig-v.t-bad{background:var(--bad-soft);color:var(--bad)}
+`;document.head.appendChild(st);})();
+
 function algoOutHTML(){
   const A=runAlgo(); let stopped=false; let h='<div class="al-flow">';
   A.steps.forEach((s,i)=>{
@@ -862,7 +932,7 @@ function algoOutHTML(){
     if(i<A.steps.length-1) h+=`<div class="al-down${(dim||s.stop)?' dim':''}">↓${s.stop?' <small>위험신호 해결 후 진행</small>':''}</div>`;
     if(s.stop) stopped=true;
   });
-  h+=`</div><div class="al-final t-${A.tone}"><h4>최종 임상의사결정</h4><div class="al-dec">${esc(A.decision)}</div><ul>${A.plan.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`;
+  h+=`</div><div class="al-final t-${A.tone}"><h4>최종 임상의사결정 — 검사 소견 + 설문 결과 통합</h4><div class="al-dec">${esc(A.decision)}</div>${A.stop?'':integHTML(A.integ)}<ul>${A.plan.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></div>`;
   return h;
 }
 function renderAlgo(){
@@ -1012,7 +1082,7 @@ function activeRegions(){
   return [...new Set(INST.filter(isComplete).map(i=>m[i.id]).filter(Boolean))];
 }
 function runAlgo(){
-  const steps=[], plan=[]; let tone='info', decision='';
+  const steps=[], plan=[], REG={}; let tone='info', decision='';
   const st1=redStep(null,'물리치료를 보류하고 의사 진료·영상 검사를 의뢰합니다. 응급 소견(말총증후군, 척수병증, 혈관 문제)은 즉시 응급 의뢰합니다.');
   steps.push(st1);
   // 2. 심리사회
@@ -1053,6 +1123,7 @@ function runAlgo(){
       else if(clinOn('n_wad')){cat='움직임 협응 장애 동반 목 통증(채찍손상)';act=dur==='급성'?['안심시키기와 활동 유지 교육, 조기 가동 운동','경추 보조기 장기 착용 지양']:['운동 조절·근지구력 훈련(깊은 목굽힘근, 어깨뼈)','통증 신경과학 교육, 필요하면 심리 연계'];}
       else {cat='가동성 결손 동반 목 통증';act=dur==='급성'?['등뼈 도수치료(조작)와 목 가동성 운동','활동 유지 교육']:['목·등뼈 도수치료와 목·어깨뼈·몸통 근력·지구력 운동','통증 신경과학 교육'];}
       const myel=dx.some(x=>x[3]==='bad');
+      REG['목']=dx.length?dx.map(([nm,c,ac,tn])=>[nm,c,tn,ac[0]]):(any?[[`${cat}(JOSPT)`,['n_rad','n_cgh','n_wad','n_mob'].filter(clinOn).length,'info',act[0]]]:[]);
       let finalAct=act, ans=cat, tone='info', br=cat, tagExtra='';
       if(dx.length){
         finalAct=[];dx.forEach(([nm,c,ac])=>finalAct.push(`[${nm}] ${ac[0]}`,`[${nm}] ${ac[1]}`));
@@ -1095,6 +1166,7 @@ function runAlgo(){
         else act=['통증 조절과 활동 유지 교육'];}
       else if(level==='mc'){cat='움직임 조절(Movement control)';act=[...(clinOn('l_rad')?['방사통: 신경 가동술과 신경 증상 추적']:[]),'운동 조절·몸통 안정화 운동(배가로근, 뭇갈래근, 볼기근)','잘못된 움직임 패턴 교정, 일상 동작 훈련',...(clinOn('l_mc')?['움직임 조절 장애 소견 확인 — 조절 운동을 우선']:[])];}
       else if(level==='fo'){cat='기능 최적화(Function optimization)';act=['점진적 근력·체력 운동, 업무·스포츠 특이적 훈련','자가 관리와 재발 예방 교육'];}
+      REG['허리']=dx.length?dx.map(([nm,c,ac,tn])=>[nm,c,tn,ac[0]]):(tbcAny?[['허리 기능 분류 소견(TBC)',['l_dp','l_rad','l_mob','l_mc'].filter(clinOn).length,'info',act[0]||'운동 조절·몸통 안정화 운동']]:[]);
       const dxTxt=dx.map(([nm,c])=>`${nm} 의심(관련 소견 ${c}/2${c===2?', 가능성 높음':''})`);
       const tbcAct=act; act=[];
       dx.forEach(([nm,c,ac])=>act.push(`[${nm}] ${ac[0]}`,`[${nm}] ${ac[1]}`));
@@ -1130,6 +1202,7 @@ function runAlgo(){
       if(!prov) act.push('유발검사 5개를 모두 시행해 3개 이상 양성인지 확인하십시오.'+(dx.length?' 양성이 3개 미만이면 허리뼈·엉덩관절 기원도 감별하십시오.':''));
       if(prov&&!noc) act.push('허리 반복 움직임 검사로 허리 기원을 배제하면 진단 정확도가 높아집니다.');
       const infl=dx.some(x=>ref(x[0]));
+      REG['엉치엉덩관절']=dx.length?dx.map(([nm,c,ac])=>[nm,c,ref(nm)?'warn':'info',ac[0]]):(prov?[[noc?'엉치엉덩관절 통증(유발검사 양성 + 중심화 없음)':'엉치엉덩관절 통증(유발검사 양성)',noc?2:1,'info',act[0]]]:[]);
       if(infl) tone='warn'; else if(!prov&&!dx.length) tone='warn';
       const ans=dx.length?dx.map(x=>x[0]+' 의심').join(' · '):base;
       steps.push({q:'엉치엉덩관절 통증 분류',ans,tone,tag:[dx.length?base:null,p!=null?`PGQ ${fmt(p)}%`:null].filter(Boolean).join(' · '),
@@ -1159,6 +1232,7 @@ function runAlgo(){
       else if(clinOn('t_post')){cat='자세 관련 등 통증';act=['등뼈 폄 운동과 어깨뼈 근력 운동(아래등세모근·마름근)','작업 자세·화면 높이 조정, 자세 바꾸기 교육'];}
       else {cat=dx.length?'':'비특이적 등 통증';tone=dx.length?'info':'warn';act=dx.length?[]:['③ 등 검사 소견을 입력하면 세부 분류가 정해집니다.','등뼈 가동성 운동과 어깨뼈·몸통 근력 운동'];}
       let ans=cat, fa=act, br=cat;
+      REG['등']=dx.length?dx.map(([nm,c,ac,tn])=>[nm,c,tn,ac[0]]):(tAny?[[cat,1,'info',act[0]]]:[]);
       if(dx.length){
         fa=[];dx.forEach(([nm,c,ac])=>fa.push(`[${nm}] ${ac[0]}`,`[${nm}] ${ac[1]}`));
         if(cat) fa.push(...act.map(x=>`[${cat}] ${x}`));
@@ -1174,8 +1248,14 @@ function runAlgo(){
   const mc=[]; if(doneInst('ndi'))mc.push('NDI 50점 기준 5~7점'); if(doneInst('odi'))mc.push('ODI 10%포인트'); if(doneInst('rmdq'))mc.push('RMDQ 2~3점(또는 30%)');
   steps.push({q:'재평가 계획',ans:'4주 후 재평가',tone:'info',find:mc.length?`임상적으로 의미 있는 변화 기준: ${mc.join(', ')}`:'같은 설문으로 다시 평가해 변화를 확인합니다.',act:['4~6주 안에 의미 있는 호전이 없으면 분류를 다시 하거나 의뢰를 고려합니다.','증상이 바뀌면(새 신경 증상 등) 위험신호 선별부터 다시 합니다.']});
   if(st1.stop){tone='bad';decision='의뢰 — 위험신호 확인';plan.unshift('위험신호: '+st1.find,'의학적 문제가 배제되면 알고리즘을 다시 진행합니다.');}
-  else {tone=steps.some(x=>x.tone==='bad')?'bad':st1.tone==='warn'?'warn':'info';if(steps.some(x=>x.ans&&x.ans.includes('척수병증')))plan.unshift('척수병증 의심 — 도수치료·견인 금지, 즉시 신경외과·척추 전문의 의뢰');decision=plan.filter(x=>!x.startsWith('공포')).map(x=>x.split(' → ')[0]).join(' / ')||'분류 자료 부족';if(st1.tone==='warn')plan.push('위험신호 선별 미확인 — 확인 후 결정 확정');plan.push('4주 후 같은 설문으로 재평가');}
-  return {steps,tone,decision,plan};
+  const IG=integrate([{reg:'목',dx:REG['목'],ids:['ndi']},{reg:'등',dx:REG['등'],ids:['fri']},{reg:'허리',dx:REG['허리'],ids:['odi','rmdq']},{reg:'엉치엉덩관절',dx:REG['엉치엉덩관절'],ids:['pgq']}],
+    {mcid:{ndi:'NDI 50점 기준 5~7점',odi:'ODI 10%포인트',rmdq:'RMDQ 2~3점(또는 30%)'},reeval:'4주 후 같은 설문으로 재평가'});
+  if(!st1.stop){const keep=plan.filter(x=>x.startsWith('공포'));
+    tone=IG.rows.some(r=>r.tone==='bad')?'bad':(st1.tone==='warn'||IG.rows.some(r=>r.tone==='warn'))?'warn':'info';
+    decision=IG.decision;plan.length=0;plan.push(...IG.plan,...keep);
+    if(IG.rows.some(r=>r.dxT.includes('척수병증')||r.dxT.includes('위목뼈 불안정성')))plan.unshift('목 응급 소견 의심 — 도수치료·견인 금지, 즉시 신경외과·척추 전문의 의뢰');
+    if(st1.tone==='warn')plan.push('위험신호 선별 미확인 — 확인 후 결정 확정');plan.push(IG.reeval);}
+  return {steps,tone,decision,plan,integ:IG,stop:!!st1.stop};
 }
 
 /* ============ 운동 안내문(그림) 탭 ============ */
