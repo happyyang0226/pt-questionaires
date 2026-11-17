@@ -3,6 +3,9 @@
   const APP=window.APP_ID;
   if(!window.supabase||!window.PTQ_CONFIG){console.warn('Supabase 설정이 없어 클라우드 저장을 끕니다.');return;}
   const sb=window.supabase.createClient(PTQ_CONFIG.url,PTQ_CONFIG.key);
+  // 교수 통합 로그인: 학습 포털에서 넘어온 한 번 쓰는 로그인 표(#sso=…)
+  const SSO=(location.hash.match(/^#sso=([A-Za-z0-9_-]+)/)||[])[1];
+  if(SSO){history.replaceState(null,'',location.pathname+location.search);sb.auth.verifyOtp({token_hash:SSO,type:'magiclink'}).catch(()=>{});}
   let user=null, profile=null, curId=null, curOwner=true, list=[], filterStudent='';
 
   /* ---------- 스타일 ---------- */
